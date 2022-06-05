@@ -6,4 +6,4 @@ from strategy.stop_loss import StopLossStrategy
 
 # stoploss_strategy = StopLossStrategy("stoploss-client", pool, "IH2206.CCFX")
 stoploss_strategy = StopLossStrategy("stoploss-client", "IH2206.CCFX")
-stoploss_strategy.subscribe("1m", stoploss_strategy.process_message)
+stoploss_strategy.subscribe("1m")

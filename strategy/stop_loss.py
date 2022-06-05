@@ -1,9 +1,11 @@
 import logging
+from pickletools import floatnl
 from time import process_time_ns
 import numpy as np
 import pytz
 
 import redis
+from sqlalchemy import null
 from mq.consumer import Consumer
 from datetime import datetime, timedelta
 from util.order import clientAPI
@@ -44,6 +46,9 @@ class StopLossStrategy(Consumer):
         self.open_ = []
         self.high = []
         self.low = []
+        self.volume = []
+        self.buy_volume = []
+        self.sell_volume = []
         self.period = period
         self.restrict = restrict
         self.volatile = volatile
@@ -314,21 +319,35 @@ class StopLossStrategy(Consumer):
         print(
             f"callback function client: {self.client_id} recieve message from channel: {channel}"
         )
-        code2data: dict = eval(message)
-        min_stop_period = 5
-        if self.code in code2data:
+        # min_stop_period = 5
+        min_stop_period = 0
+        if self.code in message:
             pass
         else:
             return
-        data = code2data.get(self.code)
+        data = message.get(self.code)
         value = self.cal_stop_loss(data=data)
+        print(data['time'] / 1e3)
+        date_time = datetime.fromtimestamp(data['time'] / 1e3, _local_zone).strftime('%Y-%m-%d %H:%M:%S')
+        if len(self.open_) <= 2:
+            return
+        if date_time[-8:] == "21:00:00":
+            self.buy_volume = []
+            self.sell_volume = []
+            return
+            
+        main_funds_sig =  self.cal_main_funds(data=data)
+        
+        if main_funds_sig == null:
+            return
+        
         print(
-            f"time: {datetime.fromtimestamp(data['time'] / 1e3, _local_zone).strftime('%Y-%m-%d %H:%M:%S')} close: {data['close']} stop_loss: {value}"
+            f"time: {date_time} close: {data['close']} stop_loss: {value}"
         )
         if sig:
-            if self.buy == False and value and value > data["close"]:
+            if self.buy == False and value and value > data["close"] and main_funds_sig:
                 print(
-                    f"buy at time: {datetime.fromtimestamp(data['time'] / 1e3).strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"buy at time: {date_time}"
                 )
                 self.buy_time = data['time'] / 1e3
                 self.buy = True
@@ -337,7 +356,7 @@ class StopLossStrategy(Consumer):
                 return
             if self.buy and self.buy_price > data["close"] and (data['time'] / 1e3 - self.buy_time - min_stop_period*60):
                 print(
-                    f"sell at time: {datetime.fromtimestamp(data['time'] / 1e3, _local_zone).strftime('%Y-%m-%d %H:%M:%S')}"
+                    f"sell at time: {date_time}"
                 )
                 self.buy = False
                 self.sell_price = data["close"]
@@ -349,6 +368,7 @@ class StopLossStrategy(Consumer):
         cur_close: float = None,
         cur_high: float = None,
         cur_low: float = None,
+        cur_vol: float = None,
         data: dict = None,
     ) -> float:
         """
@@ -365,11 +385,13 @@ class StopLossStrategy(Consumer):
             self.open_.append(data["open"])
             self.high.append(data["high"])
             self.low.append(data["low"])
+            self.volume.append(data["volume"])
         else:
             self.close_.append(cur_close)
             self.open_.append(cur_open)
             self.high.append(cur_high)
             self.low.append(cur_low)
+            self.volume.append(cur_vol)
         if len(self.stop_loss) < self.period:
             self.stop_loss.append(None)
             return None
@@ -418,7 +440,73 @@ class StopLossStrategy(Consumer):
         self.stop_loss.append(value)
         return value
 
+    def cal_main_funds(
+            self,
+            data: dict = None,
+    ) -> float:
+        """
+        Args:
+            cur_open
+            cur_close
+            cur_high
+            cur_low
+        Retures:
+            : 主力資金情况
+        """
 
+        # 主力买线
+        # BUYCONDITION1:=H>=REF(H,1)&&C>=REF(C,1);
+        if self.volume[-1] > self.volume[-2] * 1.8 and self.high[-1] >= self.high[-2] and self.close_[-1] >= \
+                self.close_[-2]:
+            # BUYCONDITION2:=O>=REF(O,1)&&L>=REF(L,1);
+            if self.open_[-1] >= self.open_[-2] and self.low[-1] >= self.low[-2]:
+                # 全局加上当前的成交量Q:=V+Q;
+                if len(self.buy_volume) == 0:
+                    self.buy_volume.append(self.volume[-1])
+                # print("buy_volume[-1]:"+str(self.buy_volume[-1])+"self.volume[-1]:"+str(self.volume[-1]))
+                self.buy_volume.append(self.buy_volume[-1] + self.volume[-1])
+
+            # BUYCONDITION3:=O<REF(O,1)||L<REF(L,1);
+            if self.open_[-1] < self.open_[-2] and self.low[-1] < self.low[-2]:
+                if self.volume[-1] > self.volume[-2] * 1.94:
+                    # 全局加上当前的成交量Q:=V+Q;
+                    if len(self.buy_volume) == 0:
+                        self.buy_volume.append(self.volume[-1])
+                    # print("buy_volume[-1]:"+str(self.buy_volume[-1])+"self.volume[-1]:"+str(self.volume[-1]))
+                    self.buy_volume.append(self.buy_volume[-1] + self.volume[-1])
+
+        # 主力卖线
+        # SELLCONDITION1:=L<=REF(L,1)&&C<=REF(C,1);
+        if self.volume[-1] > self.volume[-2] * 1.8 and self.low[-1] <= self.low[-2] and self.close_[-1] <= \
+                self.close_[-2]:
+            # SELLCONDITION2:=O<=REF(O,1)&&H<=REF(H,1);
+            if self.open_[-1] <= self.open_[-2] and self.high[-1] <= self.high[-2]:
+                # 全局加上当前的成交量Q:=V+Q;
+                if len(self.sell_volume) == 0:
+                    self.sell_volume.append(self.volume[-1])
+                else:
+                    self.sell_volume.append(self.sell_volume[-1] + self.volume[-1])
+
+            # SELLCONDITION3:=O>REF(O,1)||L>REF(L,1);
+            if self.open_[-1] > self.open_[-2] and self.low[-1] > self.low[-2]:
+                if self.volume[-1] > self.volume[-2] * 1.94:
+                    # 全局加上当前的成交量Q:=V+Q;
+                    if len(self.sell_volume) == 0:
+                        self.sell_volume.append(self.volume[-1])
+                    else:
+                        self.sell_volume.append(self.sell_volume[-1] + self.volume[-1])
+
+        if self.buy_volume and self.sell_volume:
+            if (self.buy_volume[-2] - self.sell_volume[-2]) * (self.sell_volume[-1] - self.buy_volume[-1]):
+                # 主力做空
+                if self.buy_volume[-1] <= self.sell_price[-1]:
+                    return 0
+                # 主力做多
+                elif self.buy_volume[-1] >= self.sell_price[-1]:
+                    return 1
+
+        return null
+    
 if __name__ == "__main__":
     stoploss_strategy = StopLossStrategy(
         client_id="stoploss-client", code="A2203.XDCE"

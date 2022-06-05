@@ -18,7 +18,7 @@ class Consumer(object):
             f"callback function client: {self.client_id} recieve message from channel: {channel}"
         )
 
-    def subscribe(self, channel, callback):
+    def subscribe(self, channel):
         """
         订阅操作步骤:
            1. 判断 clientID是否在persists_sub 队列中
@@ -39,7 +39,7 @@ class Consumer(object):
         self.__active = True  # 将监听开关打开
 
         # 先处理完历史消息
-        self.clear_msg(channel, callback)
+        self.clear_msg(channel)
 
         def listen():
             print(f"开启 {self.client_id} {channel} 监听线程")
@@ -53,7 +53,7 @@ class Consumer(object):
                 # print("item : {}".format(item[u'type']))
                 if item["type"] == "pmessage":
                     print(f"{self.client_id} receive a message from {channel}")
-                    self.handle(channel, item["data"], callback)
+                    self.handle(channel, item["data"])
             print(f"{self.client_id} {channel} 监听线程结束，退出")
 
         # 启动一个线程来对消息进行监听
@@ -63,7 +63,7 @@ class Consumer(object):
         listen_thread.start()
         listen_thread.join()
 
-    def clear_msg(self, channel, callback):
+    def clear_msg(self, channel):
         """
         注册时，先检查一下 channel 对应的消息list 中是否有信息，如果有就先进行处理
         :return:
@@ -98,19 +98,18 @@ class Consumer(object):
             if lmessage in ["EXIT", "exit", "Exit", "Quit", "quit", "QUIT"]:
                 self.close(channel)
             else:
-                callback(channel, lmessage, sig=0)
+                self.process_message(channel, lmessage, sig=0)
 
             # 将处理过的消息丢弃
             self.__conn.lpop(channel_key)
 
-    def handle(self, channel, message:str, callback):
+    def handle(self, channel, message:str):
         """
         :param channel: - string 渠道名
         :param message: - string 消息 是从 真正的redis channel 中接收到的消息
-        :param callback: - function 回调函数
         :return:
         """
-        index = int(message.decode().index("/"))
+        index = int(message.index("/"))
 
         if index < 0:
             # 消息不合法, 丢弃
@@ -156,7 +155,7 @@ class Consumer(object):
                 if lmessage in ["EXIT", "exit", "Exit", "Quit", "quit", "QUIT"]:
                     self.close(channel)
                 else:
-                    callback(channel, lmessage)
+                    self.process_message(channel, lmessage)
                 continue
             else:
                 break
