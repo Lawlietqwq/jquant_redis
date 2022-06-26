@@ -327,8 +327,7 @@ class StopLossStrategy(Consumer):
             return
         data = message.get(self.code)
         value = self.cal_stop_loss(data=data)
-        print(data['time'] / 1e3)
-        date_time = datetime.fromtimestamp(data['time'] / 1e3, _local_zone).strftime('%Y-%m-%d %H:%M:%S')
+        date_time = data['time']
         if len(self.open_) <= 2:
             return
         if date_time[-8:] == "21:00:00":
@@ -349,12 +348,12 @@ class StopLossStrategy(Consumer):
                 print(
                     f"buy at time: {date_time}"
                 )
-                self.buy_time = data['time'] / 1e3
+                self.buy_time = date_time
                 self.buy = True
                 self.buy_price = data["close"]
                 self.clientAPI.handleOrder(code=self.code, buyOrSell=0, lot=10, price=self.buy_price)
                 return
-            if self.buy and self.buy_price > data["close"] and (data['time'] / 1e3 - self.buy_time - min_stop_period*60):
+            if self.buy and self.buy_price > data["close"] and (date_time - self.buy_time - min_stop_period*60):
                 print(
                     f"sell at time: {date_time}"
                 )
@@ -496,13 +495,13 @@ class StopLossStrategy(Consumer):
                     else:
                         self.sell_volume.append(self.sell_volume[-1] + self.volume[-1])
 
-        if self.buy_volume and self.sell_volume:
+        if len(self.buy_volume) >= 2 and len(self.sell_volume) >= 2:
             if (self.buy_volume[-2] - self.sell_volume[-2]) * (self.sell_volume[-1] - self.buy_volume[-1]):
                 # 主力做空
-                if self.buy_volume[-1] <= self.sell_price[-1]:
+                if self.buy_volume[-1] <= self.sell_volume[-1]:
                     return 0
                 # 主力做多
-                elif self.buy_volume[-1] >= self.sell_price[-1]:
+                elif self.buy_volume[-1] >= self.sell_volume[-1]:
                     return 1
 
         return null

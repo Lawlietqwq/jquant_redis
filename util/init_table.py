@@ -7,6 +7,7 @@ from jqdatasdk.utils import query
 from tqdm import tqdm
 from util.db_util import get_connection
 from model.stop_loss import StopLossIndicator
+import numpy as np
 
 
 auth(username="18974988801", password="Bigdata12345678")
@@ -27,11 +28,11 @@ def get_underlyings():
     data["exchange"] = list(map(lambda x: x[-4:], data.index))
     data["exchange_name"] = list(map(lambda x: exchanges[x], data["exchange"]))
     data["dominate_code"] = list(map(lambda x: x[:-9] + "9999." + x[-4:], data.index))
-    data.drop_duplicates(subset=["underlying"], inplace=True)
+    data.drop_duplicates(sub=["underlying"], inplace=True)
     data = data[
         ["underlying", "underlying_name", "exchange", "exchange_name", "dominate_code"]
     ]
-    data.reset_index(inplace=True, drop=True)
+    data.re_index(inplace=True, drop=True)
     return data
 
 
@@ -44,10 +45,15 @@ def future_underlying():
     db.executemany(sql, data.values.tolist())
 
 
-def get_mappings(underlying, start_date="2021-01-01", end_date="2021-12-31"):
+def get_mappings(underlying, start_date="2021-01-01", end_date=None):
     # end_date = datetime.today()
     # start_date = end_date - timedelta(days=500)
     data = jq.get_dominant_future(underlying, start_date, end_date)
+    if isinstance(data, str):
+        dominate_code = data[:-9] + "9999." + data[-4:]
+        data = np.array([[underlying, dominate_code, start_date, data]])
+        data = pd.DataFrame(data, columns=["underlying", "dominate_code", "trade_date", "mapping_code"])
+        return data
     data = pd.DataFrame(data, columns=["mapping_code"])
     data.dropna(axis="columns", inplace=True)
     data = data[data["mapping_code"] != ""]
@@ -61,7 +67,7 @@ def get_mappings(underlying, start_date="2021-01-01", end_date="2021-12-31"):
     return data
 
 
-def future_mapping(start_date="2021-01-01", end_date="2021-12-31"):
+def future_mapping(start_date="2021-01-01", end_date=None):
     """初始化future_mapping表"""
     df = get_underlyings()
     underlyings = df["underlying"].values.tolist()
@@ -211,7 +217,6 @@ def get_minute_info(codes, start_date, end_date, skip_paused=True, extra_fields=
             "high",
             "volume",
             "money",
-            "pre_close",
             "open_interest",
         ],
     )
@@ -223,15 +228,13 @@ def get_minute_info(codes, start_date, end_date, skip_paused=True, extra_fields=
         "high",
         "volume",
         "money",
-        "pre_settle",
         "open_interest",
-        "underlying",
         "trade_date",
     ]
     if data is None or len(data) == 0:
         return None
-    data["underlying"] = list(map(lambda x: x[:-9], data["code"]))
-    data.rename(columns={"time": "trade_date", "pre_close": "pre_settle"}, inplace=True)
+    # data["underlying"] = list(map(lambda x: x[:-9], data["code"]))
+    data.rename(columns={"time": "trade_date"}, inplace=True)
     data["trade_date"] = data["trade_date"].astype("str")
     # data["trade_date"] = pd.to_datetime(data["trade_date"], infer_datetime_format=True)
     # data["trade_date"] = data["trade_date"].dt.date
@@ -240,10 +243,9 @@ def get_minute_info(codes, start_date, end_date, skip_paused=True, extra_fields=
         groups = data.groupby("code")
         for code in tqdm(codes):
             group = groups.get_group(code).copy()
-            if "pre_close" in extra_fields:
-                group.loc[:, "pre_close"] = group.loc[:, "close"].shift(periods=1)
             if "stop_loss" in extra_fields:
-                indicator = StopLossIndicator(data=data, code=code)
+                indicator = StopLossIndicator(data=group, code=code)
+                # start_index = group.iloc[0].name
                 stop_loss = indicator.predict_stop_loss(start=0)
                 group.loc[:, "stop_loss"] = stop_loss
             df = df.append(group)
@@ -313,9 +315,9 @@ if __name__ == "__main__":
     #     start_date="2022-01-01", end_date="2022-12-31", extra_fields=["pre_close"]
     # )
     # logging.info("dump data to table: future_m")
-    # future_m(
-    #     start_date="2022-04-25",
-    #     end_date="2022-12-31",
-    #     skip_paused=True,
-    #     extra_fields=["pre_close"]
-    # )
+    future_m(
+        start_date="2022-06-21",
+        end_date="2022-12-31",
+        skip_paused=True,
+        extra_fields=["pre_close"]
+    )

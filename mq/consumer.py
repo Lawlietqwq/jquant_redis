@@ -1,23 +1,26 @@
-from datetime import datetime
-from util.redis_util import redis_pooling
 import threading
+from util.mysingleton import singleton
+from util.redis_util import redis_pooling
+import json
 
+@singleton
 class Consumer(object):
-    def __init__(self, client_id):
-        # pool = redis.ConnectionPool(host="localhost", port=6378, password="yourpassword", decode_responses=True)
+    def __init__(self , channel = '1m'):
         self.__conn = redis_pooling().get_conn(1)
-        self.client_id = client_id
+        self.client_id = 'futures'
         self.pub = None
         self.__active = False
-
+        self.latest_data = None
+        self.channel = channel
+        self.strategy_list = []
+        
     def set_client_id(self, client_id):
         self.client_id = client_id
 
-    def process_message(self, channel, message, sig=1):
-        print(
-            f"callback function client: {self.client_id} recieve message from channel: {channel}"
-        )
-
+    def process_message(self, message):
+        self.latest_data = json.loads(message)
+        self.notifyAllStrategy()
+        
     def subscribe(self, channel):
         """
         订阅操作步骤:
@@ -98,7 +101,7 @@ class Consumer(object):
             if lmessage in ["EXIT", "exit", "Exit", "Quit", "quit", "QUIT"]:
                 self.close(channel)
             else:
-                self.process_message(channel, lmessage, sig=0)
+                self.process_message(lmessage)
 
             # 将处理过的消息丢弃
             self.__conn.lpop(channel_key)
@@ -125,8 +128,8 @@ class Consumer(object):
                        
             if lm is None:
                 break
-            else:
-                lm=lm.decode()
+            # else:
+            #     lm=lm.decode()
 
             # print("Client {} 从 list:{} 中获取一个消息: {}".format(self.client_id, channel_key, lm))
 
@@ -155,11 +158,19 @@ class Consumer(object):
                 if lmessage in ["EXIT", "exit", "Exit", "Quit", "quit", "QUIT"]:
                     self.close(channel)
                 else:
-                    self.process_message(channel, lmessage)
+                    self.process_message(lmessage)
                 continue
             else:
                 break
+    
+    def attach(self, strategy):
+        self.strategy_list.append(strategy)
+    
+    def notifyAllStrategy(self):
+        for strategy in self.strategy_list:
+            strategy.refresh_data()
 
+                
     def close(self, channel):
         """
         关闭channel
@@ -184,9 +195,47 @@ class Consumer(object):
         self.__conn.srem("PERSITS_SUB", channel_key)
         # 2. 删除订阅者消息队列
         self.__conn.delete(channel_key)
+        
+    def get_latest_data(self, code:str=None):
+        """
+        获取每分钟新数据
+        """
+        if code:
+            return self.latest_data.get(code)
+        return self.latest_data
 
 
-if __name__ == "__main__":
-    # pool = redis.ConnectionPool(host="localhost", port=6379, decode_responses=True)
-    client1 = Consumer("client1")
-    client1.subscribe("1m", client1.process_message)
+consumer = Consumer()
+consumer.subscribe(consumer.channel)
+
+def get_latest_data(code:str=None, consumer=consumer):
+    """
+    获取每分钟新数据
+    :return 
+        data(dict)
+        code为None,返回全合约字典;code为str,返回code对应数据;
+        
+    格式为JSON字符串转dist:
+    {
+        'code':{
+            'time':"YY:mm:dd HH:MM:SS",
+            'open':float,
+            'high':float,
+            'low':float,
+            'close':float,
+            'volume':float,
+        }.
+        'code2':{
+            ...
+        }
+    }
+    
+    """
+    try:
+        if code:
+            return consumer.latest_data.get(code)
+    except:
+        print("合约数据不存在")
+    return consumer.latest_data
+
+

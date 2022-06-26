@@ -1,7 +1,8 @@
 from sqlite3 import connect
-import time
+from util.db_util import get_connection
 import jqdatasdk as jq
 from datetime import datetime, timedelta
+from util.init_table import future_mapping
 from util.redis_util import redis_pooling
 import pandas as pd
 from requests import get
@@ -33,6 +34,7 @@ def get_dominate_codes_in_market():
     """
     today = datetime.now().strftime("%Y-%m-%d")
     db = db_util.get_connection()
+    future_mapping(start_date=today)
     sql = (
         f"select distinct mapping_code from future_mapping where trade_date = '{today}'"
     )
@@ -49,10 +51,9 @@ def cache_codes_in_market(conn):
     """
     
     dominate_codes = get_dominate_codes_in_market()
-    conn.set("dominate_codes", str(dominate_codes), ex=timedelta(days=1))
+    conn.set("dominate_codes", str(dominate_codes))
     codes = get_codes_in_market()
-    conn.set("codes", str(codes), ex=timedelta(days=1))
-
+    conn.set("codes", str(codes))
 
 def get_latest_minute_data(
     conn, producer: Producer, expire_in_days: int = 7
@@ -70,7 +71,7 @@ def get_latest_minute_data(
         end_date=datetime.now(),
         count=1,
         frequency="1m",
-        fields=["open", "high", "low", "close", "volume"],
+        fields=["open", "high", "low", "close", "volume", "money", "open_interest"],
     )  # 获取所有合约在当前分钟的一条最新数据
     data: pd.DataFrame = data[datetime.now() - data["time"] < timedelta(minutes=1)]
     if data is None or len(data) == 0:
@@ -78,8 +79,11 @@ def get_latest_minute_data(
     # print('====>',data)
     logging.info(f"number of data: {len(data)}")
     # logging.info(data.head())
-    mnt_date = data["time"].iloc[0].strftime("%Y-%m-%d %H:%M:%S")
     # print(mnt_date)
+    data['time'] = data['time'].astype(str)
+    mnt_date = data["time"].iloc[0]
+    data.rename(columns={"time": "trade_date"}, inplace=True)
+    data_copy = data.copy()
     data.set_index("code", drop=True, inplace=True)
     vjson = data.to_json(orient="index")
     # conn.set(
@@ -90,7 +94,16 @@ def get_latest_minute_data(
     # 将数据同步缓存在redis中, 保存`expire_in_days`天
     # producer.publish("1m", vjson, mnt_date)
     producer.publish("1m", vjson)
-    return data
+    db = db_util.get_connection()
+    fields = ",".join(data_copy.columns)
+    values = ",".join(["%s"] * len(data_copy.columns))
+    sql = f"""insert into future_m ({fields}) 
+        values({values})"""
+    data_copy = data_copy.values
+    data_copy[pd.isna(data_copy)] = None
+    db.executemany(sql, data_copy.tolist())
+    
+    return data_copy
 
 
 # def simulate(
@@ -142,7 +155,10 @@ def init_scheduler(conn):
     cache_codes_in_market(conn)  # 测试时直接执行, 不设置为定时任务
     # scheduler.add_job(func=cache_codes_in_market, args=[pool], trigger="cron", hour=8)
     scheduler.add_job(
-        func=get_latest_minute_data, args=[pool, producer], trigger="cron", second=1
+        func=cache_codes_in_market, args=[conn], trigger="cron", hour=8, minute=50
+    )
+    scheduler.add_job(
+        func=get_latest_minute_data, args=[conn, producer], trigger="cron", second=1
     )
     scheduler.start()
 
