@@ -4,11 +4,11 @@ import jqdatasdk as jq
 """聚宽认证装饰器函数"""
 
 
-def auth(username="18974988801", password="Bigdata12345678"):
+def auth(username="", password=""):
     jq.auth(username, password)
 
 
-def jquant_auth(f, username="18974988801", password="Bigdata12345678"):
+def jquant_auth(f, username="", password=""):
     # we use arbitrary args and keywords to
     # ensure we grab all the input arguments.
     def wrapped_f(*args, **kw):
