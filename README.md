@@ -51,9 +51,3 @@ python ./client.py
 python ./service.py
 ```
 
-## To do
-
-+ [ ] 将获取历史数据的功能部署为网络接口 (通过fastapi等web框架实现)
-+ [ ] 通过定时任务更新基础表的数据
-+ [ ] 寻找方法将期货品种保证金, 最低手数, 交易单位字段添加到future_underlying表中
-+ [ ] 增加回测功能 (计算合约保证金, 手续费)
